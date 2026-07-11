@@ -26,14 +26,20 @@
         <video id="camera" playsinline autoplay muted></video>
         <canvas id="snapshot" hidden></canvas>
         <div id="ocrOverlay" class="ocr-overlay" aria-label="認識した文字の選択領域"></div>
+        <div id="liveScanBadge" class="live-scan-badge" hidden>文字を探しています</div>
         <div id="guide" class="guide">
-          <span>文字が枠の中に入るようにしてください</span>
+          <span>文字にかざすと枠が出ます。読みたい枠をタップしてください</span>
         </div>
       </div>
 
       <div id="status" class="status" role="status" aria-live="polite">カメラを準備しています</div>
 
       <div class="secondary-tools"><label class="file-button">画像を選ぶ<input id="imageInput" type="file" accept="image/*" capture="environment" /></label><button id="rotateButton" class="text-button" type="button" hidden>画像を回転</button></div>
+
+      <div class="live-controls">
+        <label class="switch-row"><input id="liveScanToggle" type="checkbox" checked><span>カメラ中に文字を探す</span></label>
+        <button id="scanNowButton" class="text-button" type="button">今すぐ探す</button>
+      </div>
 
       <div class="primary-actions">
         <button id="freezeButton" class="button button-primary" type="button" disabled>画面を止める</button>
@@ -57,7 +63,7 @@
         </div>
         <button id="clearSelectionButton" class="text-button" type="button">選択解除</button>
       </div>
-      <p class="hint">画像上の枠、または下の単語をタップできます。複数選択も可能です。縦書きでは右の列から順に認識します。</p>
+      <p class="hint">静止後は、画像上の枠または下の単語をタップできます。カメラ中に枠をタップした場合は、その文字だけを選んで画面を固定します。</p>
       <div id="tokens" class="tokens" aria-label="認識された単語"></div>
     </section>
 
@@ -89,7 +95,7 @@
     <div class="dialog-content">
       <h2>画像と通信について</h2>
       <p>カメラ映像は画面内で一時停止するだけで、写真アプリや端末ストレージには保存しません。</p>
-      <p>文字認識と日本語の読み解析は、このブラウザ内で処理します。初回は辞書データを読み込むため通信が発生します。</p>
+      <p>文字認識と日本語の読み解析は、このブラウザ内で処理します。カメラ中の文字探索では、一定間隔で映像の縮小フレームをブラウザ内だけで解析します。初回は辞書データを読み込むため通信が発生します。</p>
       <p>「翻訳する」を押した場合だけ、選択した英語テキストを翻訳サービスへ送信します。画像は送信しません。</p>
       <button id="closePrivacyButton" class="button button-primary" type="button">閉じる</button>
     </div>

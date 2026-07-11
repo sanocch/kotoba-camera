@@ -37,7 +37,11 @@ const els = {
   speechRateValue: document.querySelector('#speechRateValue'),
   ocrMode: document.querySelector('#ocrMode'),
   layoutMode: document.querySelector('#layoutMode'),
-  openStandalone: document.querySelector('#openStandaloneButton')
+  openStandalone: document.querySelector('#openStandaloneButton'),
+  liveScanToggle: document.querySelector('#liveScanToggle'),
+  scanNow: document.querySelector('#scanNowButton'),
+  liveScanBadge: document.querySelector('#liveScanBadge'),
+  stage: document.querySelector('#stage')
 };
 
 const state = {
@@ -48,7 +52,15 @@ const state = {
   tokenizer: null,
   tokenizerPromise: null,
   rotation: 0,
-  busy: false
+  busy: false,
+  liveWorker: null,
+  liveWorkerPromise: null,
+  liveTimer: null,
+  liveScanning: false,
+  liveWords: [],
+  liveFrameWidth: 0,
+  liveFrameHeight: 0,
+  liveGeneration: 0
 };
 
 async function startCamera() {
@@ -81,7 +93,8 @@ async function startCamera() {
     els.freeze.disabled = false;
     els.retake.hidden = true;
     els.recognize.hidden = true;
-    els.status.textContent = '文字を枠内に入れて「画面を止める」を押してください';
+    els.status.textContent = '文字にかざしてください。枠が出たら、読みたい文字をタップできます。';
+    startLiveScanning();
   } catch (error) {
     console.error(error);
     els.status.textContent = cameraErrorMessage(error);
@@ -89,6 +102,7 @@ async function startCamera() {
 }
 
 function stopCamera() {
+  stopLiveScanning();
   if (!state.stream) return;
   state.stream.getTracks().forEach(track => track.stop());
   state.stream = null;
@@ -101,7 +115,7 @@ function cameraErrorMessage(error) {
   return 'カメラを開始できませんでした。ページを再読み込みしてください。';
 }
 
-async function freezeFrame() {
+async function freezeFrame(options = {}) {
   const video = els.camera;
   const canvas = els.snapshot;
 
@@ -153,7 +167,8 @@ async function freezeFrame() {
     els.recognize.hidden = false;
     els.rotate.hidden = false;
     els.overlay.replaceChildren();
-    els.status.textContent = 'この静止画を画面内に保持しています。文字認識を開始します。';
+    els.liveScanBadge.hidden = true;
+    els.status.textContent = options.skipRecognition ? '選んだ文字を処理できます。静止画はアプリ内だけに保持しています。' : 'この静止画を画面内に保持しています。文字認識を開始します。';
 
     await waitForCanvasPaint();
 
@@ -164,7 +179,7 @@ async function freezeFrame() {
 
     // さらに1回描画を待ち、表示中の静止画をそのままOCRへ渡す。
     await waitForCanvasPaint();
-    window.setTimeout(() => recognizeText(), 150);
+    if (!options.skipRecognition) window.setTimeout(() => recognizeText(), 150);
   } catch (error) {
     console.error(error);
     state.frozen = false;
@@ -175,6 +190,169 @@ async function freezeFrame() {
     els.freeze.hidden = false;
     els.freeze.disabled = false;
   }
+}
+
+
+
+async function ensureLiveWorker() {
+  if (state.liveWorker) return state.liveWorker;
+  if (state.liveWorkerPromise) return state.liveWorkerPromise;
+  state.liveWorkerPromise = Tesseract.createWorker(['jpn', 'eng'], 1, {
+    logger: message => {
+      if (!state.frozen && state.liveScanning && message.status === 'recognizing text') {
+        const pct = Math.round((message.progress || 0) * 100);
+        els.liveScanBadge.textContent = `文字を探しています ${pct}%`;
+      }
+    }
+  }).then(async worker => {
+    await worker.setParameters({
+      preserve_interword_spaces: '1',
+      tessedit_pageseg_mode: '11'
+    });
+    state.liveWorker = worker;
+    return worker;
+  }).catch(error => {
+    state.liveWorkerPromise = null;
+    throw error;
+  });
+  return state.liveWorkerPromise;
+}
+
+function startLiveScanning() {
+  stopLiveScanning();
+  if (!els.liveScanToggle?.checked || state.frozen || !state.stream) {
+    els.liveScanBadge.hidden = true;
+    return;
+  }
+  state.liveGeneration += 1;
+  const generation = state.liveGeneration;
+  els.liveScanBadge.hidden = false;
+  els.liveScanBadge.textContent = '文字認識を準備しています';
+  scanLiveFrame(generation);
+  state.liveTimer = window.setInterval(() => scanLiveFrame(generation), 2800);
+}
+
+function stopLiveScanning() {
+  state.liveGeneration += 1;
+  if (state.liveTimer) window.clearInterval(state.liveTimer);
+  state.liveTimer = null;
+  state.liveScanning = false;
+  state.liveWords = [];
+  els.liveScanBadge.hidden = true;
+  if (!state.frozen) els.overlay.replaceChildren();
+}
+
+async function scanLiveFrame(generation = state.liveGeneration) {
+  if (state.liveScanning || state.frozen || !state.stream || !els.liveScanToggle?.checked) return;
+  const video = els.camera;
+  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth) return;
+  state.liveScanning = true;
+  els.liveScanBadge.hidden = false;
+  els.liveScanBadge.textContent = '文字を探しています';
+
+  try {
+    const sourceWidth = video.videoWidth;
+    const sourceHeight = video.videoHeight;
+    const maxWidth = 960;
+    const scale = Math.min(1, maxWidth / sourceWidth);
+    const scanCanvas = document.createElement('canvas');
+    scanCanvas.width = Math.max(1, Math.round(sourceWidth * scale));
+    scanCanvas.height = Math.max(1, Math.round(sourceHeight * scale));
+    const ctx = scanCanvas.getContext('2d', { alpha: false, willReadFrequently: true });
+    ctx.drawImage(video, 0, 0, scanCanvas.width, scanCanvas.height);
+
+    const worker = await ensureLiveWorker();
+    if (generation !== state.liveGeneration || state.frozen) return;
+    const result = await worker.recognize(scanCanvas, {}, { blocks: true });
+    if (generation !== state.liveGeneration || state.frozen) return;
+
+    const words = extractWords(result.data)
+      .filter(word => word.bbox && word.text && Number(word.confidence || 0) >= 28)
+      .filter(word => /[A-Za-z0-9ぁ-んァ-ヶ一-龯々]/.test(word.text))
+      .slice(0, 80);
+
+    state.liveWords = words;
+    state.liveFrameWidth = scanCanvas.width;
+    state.liveFrameHeight = scanCanvas.height;
+    renderLiveWords();
+    els.liveScanBadge.textContent = words.length ? `${words.length}個の文字を検出` : '文字が見つかりません';
+  } catch (error) {
+    console.error('live OCR:', error);
+    els.liveScanBadge.textContent = '文字探索を再試行します';
+  } finally {
+    state.liveScanning = false;
+  }
+}
+
+function renderLiveWords() {
+  if (state.frozen) return;
+  els.overlay.replaceChildren();
+  for (const word of state.liveWords) {
+    const box = document.createElement('button');
+    box.type = 'button';
+    box.className = 'word-box live';
+    box.dataset.label = word.text;
+    box.setAttribute('aria-label', `${word.text}を選択して画面を固定`);
+    positionLiveBox(box, word.bbox);
+    box.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      selectLiveWord(word).catch(console.error);
+    });
+    els.overlay.append(box);
+  }
+}
+
+function positionLiveBox(element, bbox) {
+  const stageRect = els.stage.getBoundingClientRect();
+  const mediaWidth = state.liveFrameWidth;
+  const mediaHeight = state.liveFrameHeight;
+  if (!stageRect.width || !stageRect.height || !mediaWidth || !mediaHeight) return;
+
+  // CSS object-fit: cover と同じ拡大率・切り抜き量を使う。
+  const scale = Math.max(stageRect.width / mediaWidth, stageRect.height / mediaHeight);
+  const renderedWidth = mediaWidth * scale;
+  const renderedHeight = mediaHeight * scale;
+  const offsetX = (stageRect.width - renderedWidth) / 2;
+  const offsetY = (stageRect.height - renderedHeight) / 2;
+
+  element.style.left = `${offsetX + bbox.x0 * scale}px`;
+  element.style.top = `${offsetY + bbox.y0 * scale}px`;
+  element.style.width = `${Math.max(22, (bbox.x1 - bbox.x0) * scale)}px`;
+  element.style.height = `${Math.max(22, (bbox.y1 - bbox.y0) * scale)}px`;
+}
+
+async function selectLiveWord(word) {
+  if (state.frozen || !word?.text) return;
+  stopLiveScanning();
+  els.status.textContent = `「${word.text}」を選びました。画面を固定しています…`;
+  await freezeFrame({ skipRecognition: true });
+  if (!state.frozen) return;
+
+  const scaleX = els.snapshot.width / state.liveFrameWidth;
+  const scaleY = els.snapshot.height / state.liveFrameHeight;
+  const selectedWord = {
+    id: 0,
+    text: word.text,
+    confidence: word.confidence || 0,
+    bbox: {
+      x0: word.bbox.x0 * scaleX,
+      y0: word.bbox.y0 * scaleY,
+      x1: word.bbox.x1 * scaleX,
+      y1: word.bbox.y1 * scaleY
+    }
+  };
+  state.words = [selectedWord];
+  state.selectedIds = new Set([0]);
+  renderWords();
+  els.resultsPanel.hidden = true;
+  updateSelectionUI();
+  els.status.textContent = `選択した文字：${word.text}`;
+  els.actionPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function repositionLiveBoxes() {
+  if (!state.frozen && state.liveWords.length) renderLiveWords();
 }
 
 function waitForCanvasPaint() {
@@ -395,12 +573,17 @@ function renderWords() {
 }
 
 function positionBox(element, bbox) {
+  const stageRect = els.stage.getBoundingClientRect();
   const width = els.snapshot.width;
   const height = els.snapshot.height;
-  element.style.left = `${(bbox.x0 / width) * 100}%`;
-  element.style.top = `${(bbox.y0 / height) * 100}%`;
-  element.style.width = `${((bbox.x1 - bbox.x0) / width) * 100}%`;
-  element.style.height = `${((bbox.y1 - bbox.y0) / height) * 100}%`;
+  if (!stageRect.width || !stageRect.height || !width || !height) return;
+  const scale = Math.max(stageRect.width / width, stageRect.height / height);
+  const offsetX = (stageRect.width - width * scale) / 2;
+  const offsetY = (stageRect.height - height * scale) / 2;
+  element.style.left = `${offsetX + bbox.x0 * scale}px`;
+  element.style.top = `${offsetY + bbox.y0 * scale}px`;
+  element.style.width = `${Math.max(18, (bbox.x1 - bbox.x0) * scale)}px`;
+  element.style.height = `${Math.max(18, (bbox.y1 - bbox.y0) * scale)}px`;
 }
 
 function toggleWord(id) {
@@ -681,7 +864,7 @@ function registerServiceWorker() {
   }
 }
 
-els.freeze.addEventListener('click', freezeFrame);
+els.freeze.addEventListener('click', () => freezeFrame());
 els.retake.addEventListener('click', startCamera);
 els.recognize.addEventListener('click', recognizeText);
 els.clearSelection.addEventListener('click', () => {
@@ -701,6 +884,12 @@ els.rotate.addEventListener('click', rotateSnapshot);
 els.speechRate.addEventListener('input', () => { els.speechRateValue.value = els.speechRate.value; });
 els.layoutMode?.addEventListener('change', () => { if (state.frozen) els.status.textContent = '文字の向きを変更しました。「文字を認識する」を押すと再認識します。'; });
 els.openStandalone.addEventListener('click', () => window.open(window.location.href, '_blank', 'noopener'));
+els.liveScanToggle?.addEventListener('change', () => {
+  if (els.liveScanToggle.checked) startLiveScanning();
+  else stopLiveScanning();
+});
+els.scanNow?.addEventListener('click', () => scanLiveFrame(state.liveGeneration));
+window.addEventListener('resize', repositionLiveBoxes);
 
-window.addEventListener('pagehide', stopCamera);
+window.addEventListener('pagehide', () => { stopCamera(); state.liveWorker?.terminate().catch(() => {}); });
 window.addEventListener('load', () => { setupStandaloneHint(); registerServiceWorker(); startCamera(); });
