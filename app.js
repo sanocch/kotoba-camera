@@ -100,32 +100,100 @@ function cameraErrorMessage(error) {
   return 'カメラを開始できませんでした。ページを再読み込みしてください。';
 }
 
-function freezeFrame() {
+async function freezeFrame() {
   const video = els.camera;
   const canvas = els.snapshot;
-  if (!video.videoWidth || !video.videoHeight) return;
 
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  const ctx = canvas.getContext('2d', { alpha: false });
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  if (state.busy) return;
+  els.freeze.disabled = true;
+  els.status.textContent = '画面を固定しています…';
 
-  state.frozen = true;
-  stopCamera();
-  video.hidden = true;
-  canvas.hidden = false;
-  els.guide.hidden = true;
-  els.freeze.hidden = true;
-  els.retake.hidden = false;
-  els.recognize.hidden = false;
-  els.rotate.hidden = false;
-  els.status.textContent = '画面を止めました。続けて文字を認識します。初回は辞書の読み込みに時間がかかります。';
+  try {
+    if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      await waitForVideoReady(video);
+    }
+    await waitForRenderedVideoFrame(video);
 
-  // 画面を止めた直後にOCRを自動開始する。
-  // canvasの描画が画面へ反映されてから処理を始めるため、少しだけ待つ。
-  window.setTimeout(() => {
-    recognizeText();
-  }, 150);
+    const width = video.videoWidth;
+    const height = video.videoHeight;
+    if (!width || !height) throw new Error('video-size-unavailable');
+
+    // iPhone/iPadでは、停止直後にvideoを直接canvasへ描くと黒くなる場合がある。
+    // いったん別canvasでBlob化して画素を確定してから、表示用canvasへコピーする。
+    const buffer = document.createElement('canvas');
+    buffer.width = width;
+    buffer.height = height;
+    const bufferContext = buffer.getContext('2d', { alpha: false, willReadFrequently: true });
+    bufferContext.drawImage(video, 0, 0, width, height);
+
+    const blob = await canvasToBlob(buffer);
+    const image = await blobToImage(blob);
+
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true });
+    ctx.drawImage(image, 0, 0, width, height);
+    URL.revokeObjectURL(image.src);
+
+    // 描画が終わってからカメラを停止する。
+    state.frozen = true;
+    video.pause();
+    stopCamera();
+    video.srcObject = null;
+    video.hidden = true;
+    canvas.hidden = false;
+    els.guide.hidden = true;
+    els.freeze.hidden = true;
+    els.retake.hidden = false;
+    els.recognize.hidden = false;
+    els.rotate.hidden = false;
+    els.status.textContent = '画面を止めました。続けて文字を認識します。初回は辞書の読み込みに時間がかかります。';
+
+    window.setTimeout(() => recognizeText(), 250);
+  } catch (error) {
+    console.error(error);
+    els.status.textContent = '画面を固定できませんでした。もう一度押すか、画像を選んでください。';
+    els.freeze.disabled = false;
+  }
+}
+
+function waitForVideoReady(video) {
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => reject(new Error('video-ready-timeout')), 3000);
+    const done = () => {
+      window.clearTimeout(timeout);
+      video.removeEventListener('loadeddata', done);
+      video.removeEventListener('playing', done);
+      resolve();
+    };
+    video.addEventListener('loadeddata', done, { once: true });
+    video.addEventListener('playing', done, { once: true });
+  });
+}
+
+function waitForRenderedVideoFrame(video) {
+  return new Promise(resolve => {
+    if (typeof video.requestVideoFrameCallback === 'function') {
+      video.requestVideoFrameCallback(() => resolve());
+      return;
+    }
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  });
+}
+
+function canvasToBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('canvas-blob-failed')), 'image/jpeg', 0.95);
+  });
+}
+
+function blobToImage(blob) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('snapshot-image-failed'));
+    image.src = URL.createObjectURL(blob);
+  });
 }
 
 async function recognizeText() {

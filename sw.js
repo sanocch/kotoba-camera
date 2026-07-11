@@ -1,4 +1,4 @@
-const CACHE = "kotoba-camera-v3";
+const CACHE = "kotoba-camera-v4";
 const APP_SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./manifest.webmanifest"];
 
 self.addEventListener("install", event => {
