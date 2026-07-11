@@ -104,9 +104,9 @@ async function freezeFrame() {
   const video = els.camera;
   const canvas = els.snapshot;
 
-  if (state.busy) return;
+  if (state.busy || state.frozen) return;
   els.freeze.disabled = true;
-  els.status.textContent = '画面を固定しています…';
+  els.status.textContent = '押した瞬間の映像を固定しています…';
 
   try {
     if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
@@ -118,43 +118,68 @@ async function freezeFrame() {
     const height = video.videoHeight;
     if (!width || !height) throw new Error('video-size-unavailable');
 
-    // iPhone/iPadでは、停止直後にvideoを直接canvasへ描くと黒くなる場合がある。
-    // いったん別canvasでBlob化して画素を確定してから、表示用canvasへコピーする。
-    const buffer = document.createElement('canvas');
-    buffer.width = width;
-    buffer.height = height;
-    const bufferContext = buffer.getContext('2d', { alpha: false, willReadFrequently: true });
-    bufferContext.drawImage(video, 0, 0, width, height);
-
-    const blob = await canvasToBlob(buffer);
-    const image = await blobToImage(blob);
-
     canvas.width = width;
     canvas.height = height;
-    const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true });
-    ctx.drawImage(image, 0, 0, width, height);
-    URL.revokeObjectURL(image.src);
+    const ctx = canvas.getContext('2d', {
+      alpha: false,
+      desynchronized: false,
+      willReadFrequently: true
+    });
+    if (!ctx) throw new Error('canvas-context-unavailable');
 
-    // 描画が終わってからカメラを停止する。
+    // ボタンを押した時点のフレームを、アプリ内のCanvasへコピーする。
+    // createImageBitmapが使える端末では、映像フレームを先に独立させてから描画する。
+    if (typeof createImageBitmap === 'function') {
+      try {
+        const frame = await createImageBitmap(video);
+        ctx.drawImage(frame, 0, 0, width, height);
+        frame.close?.();
+      } catch (bitmapError) {
+        console.warn('createImageBitmap fallback:', bitmapError);
+        ctx.drawImage(video, 0, 0, width, height);
+      }
+    } else {
+      ctx.drawImage(video, 0, 0, width, height);
+    }
+
+    // カメラを止める前に、静止画を画面上へ出して描画を確定させる。
     state.frozen = true;
-    video.pause();
-    stopCamera();
-    video.srcObject = null;
-    video.hidden = true;
     canvas.hidden = false;
+    video.hidden = true;
     els.guide.hidden = true;
     els.freeze.hidden = true;
     els.retake.hidden = false;
     els.recognize.hidden = false;
     els.rotate.hidden = false;
-    els.status.textContent = '画面を止めました。続けて文字を認識します。初回は辞書の読み込みに時間がかかります。';
+    els.overlay.replaceChildren();
+    els.status.textContent = 'この静止画を画面内に保持しています。文字認識を開始します。';
 
-    window.setTimeout(() => recognizeText(), 250);
+    await waitForCanvasPaint();
+
+    // 静止画が見えた後で、裏側のカメラだけを停止する。
+    video.pause();
+    stopCamera();
+    video.srcObject = null;
+
+    // さらに1回描画を待ち、表示中の静止画をそのままOCRへ渡す。
+    await waitForCanvasPaint();
+    window.setTimeout(() => recognizeText(), 150);
   } catch (error) {
     console.error(error);
-    els.status.textContent = '画面を固定できませんでした。もう一度押すか、画像を選んでください。';
+    state.frozen = false;
+    canvas.hidden = true;
+    video.hidden = false;
+    els.guide.hidden = false;
+    els.status.textContent = '画面を固定できませんでした。もう一度押すか、「画像を選ぶ」を使ってください。';
+    els.freeze.hidden = false;
     els.freeze.disabled = false;
   }
+}
+
+function waitForCanvasPaint() {
+  return new Promise(resolve => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  });
 }
 
 function waitForVideoReady(video) {
