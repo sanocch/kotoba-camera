@@ -1,12 +1,9 @@
 {
-  "name": "ことばカメラ",
+  "name": "ことばカメラ Live",
   "short_name": "ことばカメラ",
-  "description": "文字を選んで、読み・発音・翻訳を必要なときだけ使う学習支援Webアプリ",
   "start_url": "./",
-  "scope": "./",
   "display": "standalone",
-  "background_color": "#f4f7fb",
-  "theme_color": "#2457d6",
-  "lang": "ja",
-  "orientation": "any"
+  "background_color": "#eef2f7",
+  "theme_color": "#111827",
+  "lang": "ja"
 }

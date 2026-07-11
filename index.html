@@ -4,21 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#111827">
-  <meta name="description" content="写真を保存せず、読みたい文字の範囲を選んで読み上げるWebアプリ">
+  <meta name="description" content="カメラ映像の上に文字枠を表示し、選んだ範囲だけを読み上げるWebアプリ">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <title>ことばカメラ</title>
+  <title>ことばカメラ Live</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="manifest" href="manifest.webmanifest">
 </head>
 <body>
   <main class="app-shell">
-    <div id="browserWarning" class="browser-warning" hidden>
-      <strong>Safariで開いてください</strong>
-      <span>Messengerなどのアプリ内ブラウザでは、止めた画像が黒くなることがあります。右下の「…」からSafariで開いてください。</span>
-    </div>
     <header class="app-header">
       <div>
-        <p class="eyebrow">選んだ文字だけを読む</p>
+        <p class="eyebrow">選んだところだけを読む</p>
         <h1>ことばカメラ</h1>
       </div>
       <button id="privacyButton" class="icon-button" type="button" aria-label="画像と通信について">ⓘ</button>
@@ -27,22 +23,21 @@
     <section class="camera-card">
       <div id="stage" class="stage">
         <video id="camera" playsinline autoplay muted></video>
-        <canvas id="snapshot" hidden></canvas>
-        <canvas id="displayCanvas" hidden></canvas>
+        <canvas id="analysisCanvas" hidden></canvas>
+        <div id="dimLayer" class="dim-layer" hidden></div>
         <div id="ocrOverlay" class="ocr-overlay" aria-label="読みたい文字を選ぶ領域"></div>
-        <div id="guide" class="guide"><span>文字が画面に入るようにかざしてください</span></div>
+        <div id="guide" class="guide"><span>文字にかざして、白い枠が出るまで端末を止めてください</span></div>
       </div>
 
       <div id="status" class="status" role="status" aria-live="polite">カメラを準備しています</div>
-
       <div id="progressWrap" class="progress-wrap" hidden>
         <progress id="progress" max="1" value="0"></progress>
         <span id="progressText">準備中</span>
       </div>
 
       <div class="primary-actions">
-        <button id="freezeButton" class="button button-primary button-large" type="button" disabled>画像を止める</button>
-        <button id="retakeButton" class="button" type="button" hidden>撮り直す</button>
+        <button id="scanButton" class="button button-primary button-large" type="button" disabled>文字を探す</button>
+        <button id="resumeButton" class="button button-large" type="button" hidden>別の場所を読む</button>
       </div>
 
       <details class="settings">
@@ -50,10 +45,9 @@
         <div class="settings-grid">
           <label>文字の向き
             <select id="layoutMode">
-              <option value="auto">自動</option>
               <option value="horizontal">横書き</option>
               <option value="vertical">縦書き</option>
-              <option value="textbook">教科書（縦書き優先）</option>
+              <option value="auto">自動</option>
             </select>
           </label>
           <label>読み上げ速度
@@ -76,8 +70,8 @@
   <dialog id="privacyDialog">
     <div class="dialog-content">
       <h2>画像と通信について</h2>
-      <p>「画像を止める」を押した瞬間の映像は、このページの一時メモリだけに保持します。写真アプリや端末の保存領域には保存しません。</p>
-      <p>文字認識はブラウザ内で実行します。初回は文字認識用データを読み込むため通信が発生します。画像そのものは外部へ送信しません。</p>
+      <p>カメラ映像は画面に表示するだけで、写真アプリや端末の保存領域には保存しません。</p>
+      <p>文字認識のため、映像の一場面をページ内の非表示Canvasへ一時コピーします。文字認識はブラウザ内で実行し、画像そのものは外部へ送信しません。</p>
       <button id="closePrivacyButton" class="button button-primary" type="button">閉じる</button>
     </div>
   </dialog>
