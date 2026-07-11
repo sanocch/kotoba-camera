@@ -30,7 +30,13 @@ const els = {
   output: document.querySelector('#output'),
   privacyDialog: document.querySelector('#privacyDialog'),
   privacyButton: document.querySelector('#privacyButton'),
-  closePrivacy: document.querySelector('#closePrivacyButton')
+  closePrivacy: document.querySelector('#closePrivacyButton'),
+  imageInput: document.querySelector('#imageInput'),
+  rotate: document.querySelector('#rotateButton'),
+  speechRate: document.querySelector('#speechRate'),
+  speechRateValue: document.querySelector('#speechRateValue'),
+  ocrMode: document.querySelector('#ocrMode'),
+  openStandalone: document.querySelector('#openStandaloneButton')
 };
 
 const state = {
@@ -39,12 +45,21 @@ const state = {
   words: [],
   selectedIds: new Set(),
   tokenizer: null,
-  tokenizerPromise: null
+  tokenizerPromise: null,
+  rotation: 0,
+  busy: false
 };
 
 async function startCamera() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    els.status.textContent = 'このブラウザではカメラを利用できません。「画像を選ぶ」を使ってください。';
+    els.freeze.disabled = true;
+    return;
+  }
   stopCamera();
   resetRecognition();
+  state.rotation = 0;
+  els.rotate.hidden = true;
   els.status.textContent = 'カメラの使用を許可してください';
   try {
     state.stream = await navigator.mediaDevices.getUserMedia({
@@ -103,6 +118,7 @@ function freezeFrame() {
   els.freeze.hidden = true;
   els.retake.hidden = false;
   els.recognize.hidden = false;
+  els.rotate.hidden = false;
   els.status.textContent = '画像は保存されていません。文字認識を開始できます。';
 }
 
@@ -121,7 +137,7 @@ async function recognizeText() {
 
     await worker.setParameters({
       preserve_interword_spaces: '1',
-      tessedit_pageseg_mode: '3'
+      tessedit_pageseg_mode: String(els.ocrMode.value || '3')
     });
 
     const result = await worker.recognize(els.snapshot, {}, { blocks: true });
@@ -293,7 +309,7 @@ function speak(text, lang) {
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = lang;
-  utterance.rate = 0.85;
+  utterance.rate = Number(els.speechRate.value || 0.8);
   utterance.pitch = 1;
   const voices = window.speechSynthesis.getVoices();
   const voice = voices.find(item => item.lang.toLowerCase().startsWith(lang.slice(0, 2).toLowerCase()));
@@ -378,6 +394,60 @@ function localizeOcrStatus(status) {
   return map[status] || '処理しています';
 }
 
+
+async function loadImageFile(file) {
+  if (!file) return;
+  if (!file.type.startsWith('image/')) {
+    els.status.textContent = '画像ファイルを選んでください。';
+    return;
+  }
+  stopCamera();
+  resetRecognition();
+  const bitmap = await createImageBitmap(file);
+  const maxSide = 2200;
+  const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+  els.snapshot.width = Math.round(bitmap.width * scale);
+  els.snapshot.height = Math.round(bitmap.height * scale);
+  els.snapshot.getContext('2d', { alpha: false }).drawImage(bitmap, 0, 0, els.snapshot.width, els.snapshot.height);
+  bitmap.close?.();
+  state.frozen = true;
+  state.rotation = 0;
+  els.camera.hidden = true;
+  els.snapshot.hidden = false;
+  els.guide.hidden = true;
+  els.freeze.hidden = true;
+  els.retake.hidden = false;
+  els.recognize.hidden = false;
+  els.rotate.hidden = false;
+  els.status.textContent = '画像を一時的に読み込みました。端末内には新しく保存していません。';
+}
+
+function rotateSnapshot() {
+  if (!state.frozen || !els.snapshot.width) return;
+  const source = document.createElement('canvas');
+  source.width = els.snapshot.width; source.height = els.snapshot.height;
+  source.getContext('2d').drawImage(els.snapshot, 0, 0);
+  els.snapshot.width = source.height; els.snapshot.height = source.width;
+  const ctx = els.snapshot.getContext('2d', { alpha: false });
+  ctx.translate(els.snapshot.width / 2, els.snapshot.height / 2);
+  ctx.rotate(Math.PI / 2);
+  ctx.drawImage(source, -source.width / 2, -source.height / 2);
+  resetRecognition();
+  els.status.textContent = '画像を90度回転しました。';
+}
+
+function setupStandaloneHint() {
+  const embedded = window.self !== window.top;
+  els.openStandalone.hidden = !embedded;
+  if (embedded) els.status.textContent = '埋め込み画面でカメラが開かない場合は「別画面で開く」を押してください。';
+}
+
+function registerServiceWorker() {
+  if ('serviceWorker' in navigator && window.isSecureContext) {
+    navigator.serviceWorker.register('./sw.js').catch(console.warn);
+  }
+}
+
 els.freeze.addEventListener('click', freezeFrame);
 els.retake.addEventListener('click', startCamera);
 els.recognize.addEventListener('click', recognizeText);
@@ -393,5 +463,10 @@ els.speakMixed.addEventListener('click', () => speak(joinSelectedText(selectedWo
 els.translateMixed.addEventListener('click', () => translateText(englishOnly(joinSelectedText(selectedWords()))));
 els.privacyButton.addEventListener('click', () => els.privacyDialog.showModal());
 els.closePrivacy.addEventListener('click', () => els.privacyDialog.close());
+els.imageInput.addEventListener('change', event => loadImageFile(event.target.files?.[0]).catch(error => { console.error(error); els.status.textContent = '画像を開けませんでした。'; }));
+els.rotate.addEventListener('click', rotateSnapshot);
+els.speechRate.addEventListener('input', () => { els.speechRateValue.value = els.speechRate.value; });
+els.openStandalone.addEventListener('click', () => window.open(window.location.href, '_blank', 'noopener'));
+
 window.addEventListener('pagehide', stopCamera);
-window.addEventListener('load', startCamera);
+window.addEventListener('load', () => { setupStandaloneHint(); registerServiceWorker(); startCamera(); });
