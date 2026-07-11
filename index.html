@@ -1,108 +1,84 @@
 <!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#2457d6" />
-  <meta name="description" content="カメラ映像を保存せず、文字を選んで読み・発音・翻訳を使える学習支援Webアプリ" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#111827">
+  <meta name="description" content="写真を保存せず、読みたい文字の範囲を選んで読み上げるWebアプリ">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <title>ことばカメラ</title>
-  <link rel="stylesheet" href="styles.css" />
-  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="styles.css">
+  <link rel="manifest" href="manifest.webmanifest">
 </head>
 <body>
   <main class="app-shell">
     <header class="app-header">
       <div>
-        <p class="eyebrow">文字を選んで、必要な支援だけ使う</p>
+        <p class="eyebrow">選んだ文字だけを読む</p>
         <h1>ことばカメラ</h1>
       </div>
-      <div class="header-actions"><button id="openStandaloneButton" class="text-button header-link" type="button" hidden>別画面で開く</button><button id="privacyButton" class="icon-button" type="button" aria-label="プライバシー説明">ⓘ</button></div>
+      <button id="privacyButton" class="icon-button" type="button" aria-label="画像と通信について">ⓘ</button>
     </header>
 
-    <section class="camera-card" aria-label="カメラと静止画像">
+    <section class="camera-card">
       <div id="stage" class="stage">
         <video id="camera" playsinline autoplay muted></video>
         <canvas id="snapshot" hidden></canvas>
-        <div id="ocrOverlay" class="ocr-overlay" aria-label="認識した文字の選択領域"></div>
-        <div id="liveScanBadge" class="live-scan-badge" hidden>文字を探しています</div>
-        <div id="guide" class="guide">
-          <span>文字にかざすと枠が出ます。読みたい枠をタップしてください</span>
-        </div>
+        <canvas id="displayCanvas" hidden></canvas>
+        <div id="ocrOverlay" class="ocr-overlay" aria-label="読みたい文字を選ぶ領域"></div>
+        <div id="guide" class="guide"><span>文字が画面に入るようにかざしてください</span></div>
       </div>
 
       <div id="status" class="status" role="status" aria-live="polite">カメラを準備しています</div>
-
-      <div class="secondary-tools"><label class="file-button">画像を選ぶ<input id="imageInput" type="file" accept="image/*" capture="environment" /></label><button id="rotateButton" class="text-button" type="button" hidden>画像を回転</button></div>
-
-      <div class="live-controls">
-        <label class="switch-row"><input id="liveScanToggle" type="checkbox" checked><span>カメラ中に文字を探す</span></label>
-        <button id="scanNowButton" class="text-button" type="button">今すぐ探す</button>
-      </div>
-
-      <div class="primary-actions">
-        <button id="freezeButton" class="button button-primary" type="button" disabled>画面を止める</button>
-        <button id="retakeButton" class="button" type="button" hidden>撮り直す</button>
-        <button id="recognizeButton" class="button button-primary" type="button" hidden>文字を認識する</button>
-      </div>
-
-      <details class="settings"><summary>表示・音声設定</summary><div class="settings-grid"><label>読み上げ速度<input id="speechRate" type="range" min="0.5" max="1.3" step="0.1" value="0.8"><output id="speechRateValue">0.8</output></label><label>文字の向き<select id="layoutMode"><option value="auto">自動判定</option><option value="horizontal">横書き</option><option value="vertical">縦書き</option><option value="textbook">教科書モード（縦書き優先）</option></select></label><label>OCRモード<select id="ocrMode"><option value="3">自動</option><option value="6">文章・段落</option><option value="11">まばらな文字</option></select></label></div></details>
 
       <div id="progressWrap" class="progress-wrap" hidden>
         <progress id="progress" max="1" value="0"></progress>
         <span id="progressText">準備中</span>
       </div>
-    </section>
 
-    <section id="resultsPanel" class="panel" hidden>
-      <div class="panel-heading">
-        <div>
-          <p class="eyebrow">認識結果</p>
-          <h2>文字を選んでください</h2>
+      <div class="primary-actions">
+        <button id="freezeButton" class="button button-primary button-large" type="button" disabled>画像を止める</button>
+        <button id="retakeButton" class="button" type="button" hidden>撮り直す</button>
+      </div>
+
+      <details class="settings">
+        <summary>設定</summary>
+        <div class="settings-grid">
+          <label>文字の向き
+            <select id="layoutMode">
+              <option value="auto">自動</option>
+              <option value="horizontal">横書き</option>
+              <option value="vertical">縦書き</option>
+              <option value="textbook">教科書（縦書き優先）</option>
+            </select>
+          </label>
+          <label>読み上げ速度
+            <input id="speechRate" type="range" min="0.5" max="1.3" step="0.1" value="0.8">
+            <output id="speechRateValue">0.8</output>
+          </label>
         </div>
-        <button id="clearSelectionButton" class="text-button" type="button">選択解除</button>
-      </div>
-      <p class="hint">静止後は、画像上の枠または下の単語をタップできます。カメラ中に枠をタップした場合は、その文字だけを選んで画面を固定します。</p>
-      <div id="tokens" class="tokens" aria-label="認識された単語"></div>
+      </details>
     </section>
 
-    <section id="actionPanel" class="panel action-panel" hidden>
-      <p class="eyebrow">選択した文字</p>
-      <div id="selectedText" class="selected-text"></div>
-      <div id="languageBadge" class="badge"></div>
-
-      <div id="japaneseActions" class="action-grid" hidden>
-        <button id="showReadingButton" class="button button-primary" type="button">読みを表示</button>
-        <button id="speakJapaneseButton" class="button" type="button">読み上げる</button>
-      </div>
-
-      <div id="englishActions" class="action-grid" hidden>
-        <button id="speakEnglishButton" class="button button-primary" type="button">発音を聞く</button>
-        <button id="translateButton" class="button" type="button">翻訳する</button>
-      </div>
-
-      <div id="mixedActions" class="action-grid" hidden>
-        <button id="speakMixedButton" class="button button-primary" type="button">読み上げる</button>
-        <button id="translateMixedButton" class="button" type="button">英語部分を翻訳</button>
-      </div>
-
-      <div id="output" class="output" hidden></div>
+    <section id="selectionPanel" class="panel" hidden>
+      <p class="eyebrow">選んだ範囲</p>
+      <div id="selectedText" class="selected-text">文字を選んでください</div>
+      <p id="selectionHint" class="hint">最初の文字をタップしてください。</p>
+      <button id="speakButton" class="button button-primary speak-button" type="button" hidden>🔊 読み上げる</button>
+      <button id="clearSelectionButton" class="text-button clear-button" type="button" hidden>選び直す</button>
     </section>
   </main>
 
   <dialog id="privacyDialog">
     <div class="dialog-content">
       <h2>画像と通信について</h2>
-      <p>カメラ映像は画面内で一時停止するだけで、写真アプリや端末ストレージには保存しません。</p>
-      <p>文字認識と日本語の読み解析は、このブラウザ内で処理します。カメラ中の文字探索では、一定間隔で映像の縮小フレームをブラウザ内だけで解析します。初回は辞書データを読み込むため通信が発生します。</p>
-      <p>「翻訳する」を押した場合だけ、選択した英語テキストを翻訳サービスへ送信します。画像は送信しません。</p>
+      <p>「画像を止める」を押した瞬間の映像は、このページの一時メモリだけに保持します。写真アプリや端末の保存領域には保存しません。</p>
+      <p>文字認識はブラウザ内で実行します。初回は文字認識用データを読み込むため通信が発生します。画像そのものは外部へ送信しません。</p>
       <button id="closePrivacyButton" class="button button-primary" type="button">閉じる</button>
     </div>
   </dialog>
 
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@6/dist/tesseract.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/build/kuromoji.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
