@@ -36,6 +36,7 @@ const els = {
   speechRate: document.querySelector('#speechRate'),
   speechRateValue: document.querySelector('#speechRateValue'),
   ocrMode: document.querySelector('#ocrMode'),
+  layoutMode: document.querySelector('#layoutMode'),
   openStandalone: document.querySelector('#openStandaloneButton')
 };
 
@@ -226,23 +227,38 @@ async function recognizeText() {
   resetRecognition();
   setBusy(true, 'OCRを準備しています', 0);
 
+  let worker;
   try {
-    const worker = await Tesseract.createWorker(['jpn', 'eng'], 1, {
+    worker = await Tesseract.createWorker(['jpn', 'eng'], 1, {
       logger: message => {
         const progress = typeof message.progress === 'number' ? message.progress : 0;
         setBusy(true, localizeOcrStatus(message.status), progress);
       }
     });
 
-    await worker.setParameters({
-      preserve_interword_spaces: '1',
-      tessedit_pageseg_mode: String(els.ocrMode.value || '3')
-    });
+    const candidates = getOrientationCandidates();
+    let best = null;
 
-    const result = await worker.recognize(els.snapshot, {}, { blocks: true });
-    await worker.terminate();
+    for (let index = 0; index < candidates.length; index++) {
+      const angle = candidates[index];
+      const source = createRotatedCanvas(els.snapshot, angle);
+      const psm = getPageSegmentationMode(angle);
+      await worker.setParameters({
+        preserve_interword_spaces: '1',
+        tessedit_pageseg_mode: String(psm)
+      });
 
-    state.words = extractWords(result.data);
+      setBusy(true, `${orientationLabel(angle)}を認識しています（${index + 1}/${candidates.length}）`, index / candidates.length);
+      const result = await worker.recognize(source, {}, { blocks: true });
+      const words = extractWords(result.data).map(word => ({
+        ...word,
+        bbox: word.bbox ? mapRotatedBboxToOriginal(word.bbox, angle, els.snapshot.width, els.snapshot.height) : null
+      }));
+      const score = scoreRecognition(words, result.data.text || '');
+      if (!best || score > best.score) best = { words, score, angle };
+    }
+
+    state.words = best?.words || [];
     if (!state.words.length) {
       els.status.textContent = '文字を認識できませんでした。明るくして、文字に近づいて撮り直してください。';
       return;
@@ -250,14 +266,79 @@ async function recognizeText() {
 
     renderWords();
     els.resultsPanel.hidden = false;
-    els.status.textContent = `${state.words.length}個の文字領域を認識しました。`;
+    const direction = best.angle === 0 ? '横書き' : '縦書き';
+    els.status.textContent = `${direction}として${state.words.length}個の文字領域を認識しました。`;
     els.resultsPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (error) {
     console.error(error);
     els.status.textContent = '文字認識に失敗しました。通信状態を確認して、もう一度試してください。';
   } finally {
+    try { await worker?.terminate(); } catch (_) {}
     setBusy(false);
   }
+}
+
+function getOrientationCandidates() {
+  const mode = els.layoutMode?.value || 'auto';
+  if (mode === 'horizontal') return [0];
+  if (mode === 'vertical') return [90, 270];
+  if (mode === 'textbook') return [90, 270, 0];
+  return [0, 90, 270];
+}
+
+function getPageSegmentationMode(angle) {
+  const selected = Number(els.ocrMode.value || 3);
+  if (selected !== 3) return selected;
+  return angle === 0 ? 3 : 6;
+}
+
+function orientationLabel(angle) {
+  return angle === 0 ? '横書き候補' : angle === 90 ? '縦書き候補（右回転）' : '縦書き候補（左回転）';
+}
+
+function createRotatedCanvas(source, angle) {
+  if (angle === 0) return source;
+  const canvas = document.createElement('canvas');
+  canvas.width = source.height;
+  canvas.height = source.width;
+  const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true });
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (angle === 90) {
+    ctx.translate(canvas.width, 0);
+    ctx.rotate(Math.PI / 2);
+  } else {
+    ctx.translate(0, canvas.height);
+    ctx.rotate(-Math.PI / 2);
+  }
+  ctx.drawImage(source, 0, 0);
+  return canvas;
+}
+
+function mapRotatedBboxToOriginal(bbox, angle, originalWidth, originalHeight) {
+  if (angle === 0) return bbox;
+  if (angle === 90) {
+    return {
+      x0: Math.max(0, bbox.y0),
+      y0: Math.max(0, originalHeight - bbox.x1),
+      x1: Math.min(originalWidth, bbox.y1),
+      y1: Math.min(originalHeight, originalHeight - bbox.x0)
+    };
+  }
+  return {
+    x0: Math.max(0, originalWidth - bbox.y1),
+    y0: Math.max(0, bbox.x0),
+    x1: Math.min(originalWidth, originalWidth - bbox.y0),
+    y1: Math.min(originalHeight, bbox.x1)
+  };
+}
+
+function scoreRecognition(words, fullText) {
+  const useful = words.filter(word => /[A-Za-z0-9ぁ-んァ-ヶ一-龯々]/.test(word.text));
+  const chars = useful.reduce((sum, word) => sum + word.text.replace(/\s/g, '').length, 0);
+  const confidence = useful.length ? useful.reduce((sum, word) => sum + Number(word.confidence || 0), 0) / useful.length : 0;
+  const replacementPenalty = (fullText.match(/[�□]/g) || []).length * 8;
+  return chars * 2 + useful.length * 3 + confidence * 0.25 - replacementPenalty;
 }
 
 function extractWords(data) {
@@ -618,6 +699,7 @@ els.closePrivacy.addEventListener('click', () => els.privacyDialog.close());
 els.imageInput.addEventListener('change', event => loadImageFile(event.target.files?.[0]).catch(error => { console.error(error); els.status.textContent = '画像を開けませんでした。'; }));
 els.rotate.addEventListener('click', rotateSnapshot);
 els.speechRate.addEventListener('input', () => { els.speechRateValue.value = els.speechRate.value; });
+els.layoutMode?.addEventListener('change', () => { if (state.frozen) els.status.textContent = '文字の向きを変更しました。「文字を認識する」を押すと再認識します。'; });
 els.openStandalone.addEventListener('click', () => window.open(window.location.href, '_blank', 'noopener'));
 
 window.addEventListener('pagehide', stopCamera);
