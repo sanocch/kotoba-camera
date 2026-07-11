@@ -383,21 +383,72 @@ function loadTokenizer() {
 }
 
 async function showReading() {
-  const text = joinSelectedText(selectedWords());
+  const originalText = joinSelectedText(selectedWords()).trim();
+  if (!originalText) return;
+
   showOutput('読みを調べています…');
+  els.showReading.disabled = true;
+
   try {
     const tokenizer = await loadTokenizer();
-    const tokens = tokenizer.tokenize(text);
-    const reading = tokens.map(token => katakanaToHiragana(token.reading || token.surface_form)).join('');
-    showOutput(`${text}\n${reading}`);
+    // OCRが日本語の単語間に入れた空白は、解析前に除く。
+    // 英数字の語中の空白は残す。
+    const analysisText = originalText.replace(/(?<=[ぁ-んァ-ヶ一-龯々〆ヵヶ])\s+(?=[ぁ-んァ-ヶ一-龯々〆ヵヶ])/g, '');
+    const tokens = tokenizer.tokenize(analysisText);
+    renderReadingResult(originalText, tokens);
   } catch (error) {
     console.error(error);
-    showOutput('読みを取得できませんでした。通信状態を確認してください。');
+    showOutput('読みを取得できませんでした。通信状態を確認して、もう一度押してください。');
+  } finally {
+    els.showReading.disabled = false;
   }
 }
 
+function renderReadingResult(originalText, tokens) {
+  els.output.replaceChildren();
+  els.output.hidden = false;
+  els.output.classList.add('reading-output');
+
+  const label = document.createElement('div');
+  label.className = 'output-label';
+  label.textContent = 'ふりがな';
+
+  const rubyLine = document.createElement('div');
+  rubyLine.className = 'ruby-line';
+  rubyLine.setAttribute('aria-label', `${originalText}の読み`);
+
+  const readingParts = [];
+  for (const token of tokens) {
+    const surface = token.surface_form || '';
+    const rawReading = token.reading && token.reading !== '*' ? token.reading : surface;
+    const reading = katakanaToHiragana(rawReading);
+    readingParts.push(reading);
+
+    if (/[一-龯々〆ヵヶ]/.test(surface) && reading && reading !== surface) {
+      const ruby = document.createElement('ruby');
+      ruby.append(document.createTextNode(surface));
+      const rt = document.createElement('rt');
+      rt.textContent = reading;
+      ruby.append(rt);
+      rubyLine.append(ruby);
+    } else {
+      rubyLine.append(document.createTextNode(surface));
+    }
+  }
+
+  const plainLabel = document.createElement('div');
+  plainLabel.className = 'output-label plain-reading-label';
+  plainLabel.textContent = '読み';
+
+  const plainReading = document.createElement('div');
+  plainReading.className = 'plain-reading';
+  plainReading.textContent = readingParts.join('');
+
+  els.output.append(label, rubyLine, plainLabel, plainReading);
+}
+
 function katakanaToHiragana(text) {
-  return text.replace(/[ァ-ヶ]/g, char => String.fromCharCode(char.charCodeAt(0) - 0x60));
+  return String(text || '').replace(/[ァ-ヶ]/g, char => String.fromCharCode(char.charCodeAt(0) - 0x60));
 }
 
 function speak(text, lang) {
@@ -455,11 +506,13 @@ function decodeHtml(value) {
 }
 
 function showOutput(text) {
+  els.output.classList.remove('reading-output');
   els.output.textContent = text;
   els.output.hidden = false;
 }
 
 function hideOutput() {
+  els.output.classList.remove('reading-output');
   els.output.hidden = true;
   els.output.textContent = '';
 }
