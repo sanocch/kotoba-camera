@@ -119,7 +119,13 @@ function freezeFrame() {
   els.retake.hidden = false;
   els.recognize.hidden = false;
   els.rotate.hidden = false;
-  els.status.textContent = '画像は保存されていません。文字認識を開始できます。';
+  els.status.textContent = '画面を止めました。続けて文字を認識します。初回は辞書の読み込みに時間がかかります。';
+
+  // 画面を止めた直後にOCRを自動開始する。
+  // canvasの描画が画面へ反映されてから処理を始めるため、少しだけ待つ。
+  window.setTimeout(() => {
+    recognizeText();
+  }, 150);
 }
 
 async function recognizeText() {
