@@ -1,7 +1,7 @@
 'use strict';
 
 const els={
-  camera:document.querySelector('#camera'),snapshot:document.querySelector('#snapshot'),display:document.querySelector('#displayCanvas'),overlay:document.querySelector('#ocrOverlay'),stage:document.querySelector('#stage'),guide:document.querySelector('#guide'),status:document.querySelector('#status'),freeze:document.querySelector('#freezeButton'),retake:document.querySelector('#retakeButton'),progressWrap:document.querySelector('#progressWrap'),progress:document.querySelector('#progress'),progressText:document.querySelector('#progressText'),selectionPanel:document.querySelector('#selectionPanel'),selectedText:document.querySelector('#selectedText'),selectionHint:document.querySelector('#selectionHint'),speak:document.querySelector('#speakButton'),clear:document.querySelector('#clearSelectionButton'),layoutMode:document.querySelector('#layoutMode'),speechRate:document.querySelector('#speechRate'),speechRateValue:document.querySelector('#speechRateValue'),privacyDialog:document.querySelector('#privacyDialog'),privacyButton:document.querySelector('#privacyButton'),closePrivacy:document.querySelector('#closePrivacyButton')
+  camera:document.querySelector('#camera'),snapshot:document.querySelector('#snapshot'),display:document.querySelector('#displayCanvas'),overlay:document.querySelector('#ocrOverlay'),stage:document.querySelector('#stage'),guide:document.querySelector('#guide'),status:document.querySelector('#status'),freeze:document.querySelector('#freezeButton'),retake:document.querySelector('#retakeButton'),progressWrap:document.querySelector('#progressWrap'),progress:document.querySelector('#progress'),progressText:document.querySelector('#progressText'),selectionPanel:document.querySelector('#selectionPanel'),selectedText:document.querySelector('#selectedText'),selectionHint:document.querySelector('#selectionHint'),speak:document.querySelector('#speakButton'),clear:document.querySelector('#clearSelectionButton'),layoutMode:document.querySelector('#layoutMode'),speechRate:document.querySelector('#speechRate'),speechRateValue:document.querySelector('#speechRateValue'),privacyDialog:document.querySelector('#privacyDialog'),privacyButton:document.querySelector('#privacyButton'),closePrivacy:document.querySelector('#closePrivacyButton'),browserWarning:document.querySelector('#browserWarning')
 };
 
 const state={stream:null,frozen:false,busy:false,units:[],startIndex:null,endIndex:null,bestAngle:0};
@@ -29,15 +29,25 @@ async function freezeFrame(){
     const w=els.camera.videoWidth,h=els.camera.videoHeight;if(!w||!h)throw new Error('no-size');
     els.snapshot.width=w;els.snapshot.height=h;els.display.width=w;els.display.height=h;
     const ctx=els.snapshot.getContext('2d',{alpha:false,willReadFrequently:true});
-    if(typeof createImageBitmap==='function'){
-      try{const frame=await createImageBitmap(els.camera);ctx.drawImage(frame,0,0,w,h);frame.close?.();}catch{ctx.drawImage(els.camera,0,0,w,h);}
-    }else ctx.drawImage(els.camera,0,0,w,h);
+    let captured=false;
+    for(let attempt=0;attempt<4&&!captured;attempt++){
+      if(attempt>0)await new Promise(r=>setTimeout(r,120));
+      await waitFrame(els.camera);
+      ctx.fillStyle='#fff';ctx.fillRect(0,0,w,h);
+      try{
+        if(typeof createImageBitmap==='function'){
+          const frame=await createImageBitmap(els.camera);ctx.drawImage(frame,0,0,w,h);frame.close?.();
+        }else ctx.drawImage(els.camera,0,0,w,h);
+      }catch{ctx.drawImage(els.camera,0,0,w,h);}
+      captured=frameLooksUsable(ctx,w,h);
+    }
+    if(!captured)throw new Error('black-frame');
     els.display.getContext('2d',{alpha:false}).drawImage(els.snapshot,0,0);
     state.frozen=true;els.display.hidden=false;els.camera.hidden=true;els.snapshot.hidden=true;els.guide.hidden=true;els.freeze.hidden=true;els.retake.hidden=false;
     await paint();els.camera.pause();stopCamera();await paint();
     els.status.textContent='文字を探しています。少し待ってください。';
     window.setTimeout(recognizeText,120);
-  }catch(error){console.error(error);state.frozen=false;els.freeze.hidden=false;els.freeze.disabled=false;els.status.textContent='画像を固定できませんでした。もう一度試してください。';}
+  }catch(error){console.error(error);state.frozen=false;els.freeze.hidden=false;els.freeze.disabled=false;els.status.textContent=error?.message==='black-frame'?'画像を取得できませんでした。Safariで開いて、もう一度試してください。':'画像を固定できませんでした。もう一度試してください。';}
 }
 
 async function recognizeText(){
@@ -94,8 +104,8 @@ function speakSelection(){const text=selectedString();if(!text)return;window.spe
 
 function drawNormal(){const ctx=els.display.getContext('2d',{alpha:false});ctx.clearRect(0,0,els.display.width,els.display.height);ctx.drawImage(els.snapshot,0,0);}
 function drawDimmedWithReadableAreas(){
-  const ctx=els.display.getContext('2d',{alpha:false});drawNormal();ctx.fillStyle='rgba(0,0,0,.58)';ctx.fillRect(0,0,els.display.width,els.display.height);
-  for(const u of state.units){if(!u.bbox)continue;const p=5,x=Math.max(0,u.bbox.x0-p),y=Math.max(0,u.bbox.y0-p),w=Math.min(els.snapshot.width-x,u.bbox.x1-u.bbox.x0+p*2),h=Math.min(els.snapshot.height-y,u.bbox.y1-u.bbox.y0+p*2);ctx.drawImage(els.snapshot,x,y,w,h,x,y,w,h);}
+  const ctx=els.display.getContext('2d',{alpha:false});drawNormal();ctx.fillStyle='rgba(0,0,0,.36)';ctx.fillRect(0,0,els.display.width,els.display.height);
+  for(const u of state.units){if(!u.bbox)continue;const p=10,x=Math.max(0,u.bbox.x0-p),y=Math.max(0,u.bbox.y0-p),w=Math.min(els.snapshot.width-x,u.bbox.x1-u.bbox.x0+p*2),h=Math.min(els.snapshot.height-y,u.bbox.y1-u.bbox.y0+p*2);ctx.drawImage(els.snapshot,x,y,w,h,x,y,w,h);}
 }
 function redrawSelectionEmphasis(){drawDimmedWithReadableAreas();const ctx=els.display.getContext('2d',{alpha:false});for(const u of selectedRange()){const p=8,x=Math.max(0,u.bbox.x0-p),y=Math.max(0,u.bbox.y0-p),w=Math.min(els.snapshot.width-x,u.bbox.x1-u.bbox.x0+p*2),h=Math.min(els.snapshot.height-y,u.bbox.y1-u.bbox.y0+p*2);ctx.drawImage(els.snapshot,x,y,w,h,x,y,w,h);ctx.strokeStyle='#facc15';ctx.lineWidth=Math.max(3,els.snapshot.width/400);ctx.strokeRect(x,y,w,h);}}
 
@@ -107,6 +117,23 @@ function rotatedCanvas(src,angle){if(angle===0)return src;const c=document.creat
 function mapBbox(b,angle,ow,oh){if(angle===0)return b;if(angle===90)return{x0:Math.max(0,b.y0),y0:Math.max(0,oh-b.x1),x1:Math.min(ow,b.y1),y1:Math.min(oh,oh-b.x0)};return{x0:Math.max(0,ow-b.y1),y0:Math.max(0,b.x0),x1:Math.min(ow,ow-b.y0),y1:Math.min(oh,b.x1)};}
 function scoreResult(units,text){const useful=units.filter(u=>/[A-Za-z0-9ぁ-んァ-ヶ一-龯々]/.test(u.text));const chars=useful.reduce((n,u)=>n+u.text.length,0),conf=useful.length?useful.reduce((n,u)=>n+Number(u.confidence||0),0)/useful.length:0;return chars*3+useful.length*2+conf*.2-(text.match(/[�□]/g)||[]).length*8;}
 
+
+function frameLooksUsable(ctx,w,h){
+  try{
+    const sw=Math.min(64,w),sh=Math.min(64,h),sx=Math.max(0,(w-sw)/2),sy=Math.max(0,(h-sh)/2);
+    const data=ctx.getImageData(sx,sy,sw,sh).data;
+    let sum=0,min=255,max=0;
+    for(let i=0;i<data.length;i+=4){const y=(data[i]*0.2126+data[i+1]*0.7152+data[i+2]*0.0722);sum+=y;if(y<min)min=y;if(y>max)max=y;}
+    const avg=sum/(data.length/4);
+    return avg>4 && (max-min)>3;
+  }catch{return true;}
+}
+function detectInAppBrowser(){
+  const ua=navigator.userAgent||'';
+  const inApp=/FBAN|FBAV|Instagram|Line\/|Messenger|Twitter|GSA|CriOS/.test(ua) && /iPhone|iPad|iPod/.test(ua);
+  if(inApp&&els.browserWarning)els.browserWarning.hidden=false;
+}
+
 function setBusy(on,text='',value=0){state.busy=on;els.progressWrap.hidden=!on;els.progress.value=value;els.progressText.textContent=text;els.retake.disabled=on;}
 function localizeStatus(s){return({'loading tesseract core':'認識機能を読み込んでいます','initializing tesseract':'認識機能を準備しています','loading language traineddata':'日本語・英語の辞書を読み込んでいます','initializing api':'辞書を準備しています','recognizing text':'文字を認識しています'})[s]||'処理しています';}
 function waitVideo(v){return new Promise((res,rej)=>{const t=setTimeout(()=>rej(new Error('timeout')),4000);const done=()=>{clearTimeout(t);res();};v.addEventListener('loadeddata',done,{once:true});v.addEventListener('playing',done,{once:true});});}
@@ -115,4 +142,4 @@ function paint(){return new Promise(res=>requestAnimationFrame(()=>requestAnimat
 function resetAll(){state.frozen=false;state.busy=false;state.units=[];state.startIndex=null;state.endIndex=null;els.overlay.replaceChildren();els.selectionPanel.hidden=true;els.progressWrap.hidden=true;window.speechSynthesis.cancel();}
 function registerSW(){if('serviceWorker'in navigator&&window.isSecureContext)navigator.serviceWorker.register('./sw.js').catch(console.warn);}
 
-els.freeze.addEventListener('click',freezeFrame);els.retake.addEventListener('click',startCamera);els.speak.addEventListener('click',speakSelection);els.clear.addEventListener('click',clearSelection);els.speechRate.addEventListener('input',()=>{els.speechRateValue.value=els.speechRate.value;});els.privacyButton.addEventListener('click',()=>els.privacyDialog.showModal());els.closePrivacy.addEventListener('click',()=>els.privacyDialog.close());window.addEventListener('resize',repositionBoxes);window.addEventListener('pagehide',()=>{stopCamera();window.speechSynthesis.cancel();});window.addEventListener('load',()=>{registerSW();startCamera();});
+els.freeze.addEventListener('click',freezeFrame);els.retake.addEventListener('click',startCamera);els.speak.addEventListener('click',speakSelection);els.clear.addEventListener('click',clearSelection);els.speechRate.addEventListener('input',()=>{els.speechRateValue.value=els.speechRate.value;});els.privacyButton.addEventListener('click',()=>els.privacyDialog.showModal());els.closePrivacy.addEventListener('click',()=>els.privacyDialog.close());window.addEventListener('resize',repositionBoxes);window.addEventListener('pagehide',()=>{stopCamera();window.speechSynthesis.cancel();});window.addEventListener('load',()=>{detectInAppBrowser();registerSW();startCamera();});
