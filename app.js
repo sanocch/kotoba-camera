@@ -8,12 +8,14 @@ const els = {
   panel: $('#selectionPanel'), selectedText: $('#selectedText'), hint: $('#selectionHint'),
   speak: $('#speakButton'), clear: $('#clearSelectionButton'), layout: $('#layoutMode'),
   rate: $('#speechRate'), rateValue: $('#speechRateValue'), privacy: $('#privacyDialog'),
-  privacyButton: $('#privacyButton'), closePrivacy: $('#closePrivacyButton')
+  privacyButton: $('#privacyButton'), closePrivacy: $('#closePrivacyButton'),
+  zoomSlider: $('#zoomSlider'), zoomOut: $('#zoomOutButton'), zoomIn: $('#zoomInButton'), zoomValue: $('#zoomValue')
 };
 
 const state = {
   stream: null, worker: null, busy: false, locked: false, units: [], startIndex: null, endIndex: null,
-  frameWidth: 0, frameHeight: 0
+  frameWidth: 0, frameHeight: 0, zoom: 1, pinchStartDistance: 0, pinchStartZoom: 1,
+  displayRect: null
 };
 
 async function startCamera() {
@@ -33,7 +35,7 @@ async function startCamera() {
     state.locked = false;
     els.scan.disabled = false; els.scan.hidden = false; els.resume.hidden = true;
     els.guide.hidden = false; els.dim.hidden = true;
-    els.status.textContent = '文字にかざし、端末を止めて「文字を探す」を押してください。';
+    els.status.textContent = 'ピンチまたは＋−で拡大し、点線枠に文字を入れてください。';
     initWorker().catch(console.error);
   } catch (e) {
     console.error(e); els.status.textContent = cameraErrorMessage(e);
@@ -56,40 +58,85 @@ async function initWorker() {
   return state.worker;
 }
 
+function getGuideRect() {
+  const stageRect = els.stage.getBoundingClientRect();
+  const guideRect = els.guide.getBoundingClientRect();
+  return {
+    x: guideRect.left - stageRect.left,
+    y: guideRect.top - stageRect.top,
+    width: guideRect.width,
+    height: guideRect.height
+  };
+}
+
+function visibleVideoCrop(videoW, videoH) {
+  const stageRect = els.stage.getBoundingClientRect();
+  const stageAspect = stageRect.width / stageRect.height;
+  const videoAspect = videoW / videoH;
+  let baseW, baseH, baseX, baseY;
+  if (videoAspect > stageAspect) {
+    baseH = videoH; baseW = videoH * stageAspect; baseX = (videoW - baseW) / 2; baseY = 0;
+  } else {
+    baseW = videoW; baseH = videoW / stageAspect; baseX = 0; baseY = (videoH - baseH) / 2;
+  }
+  const zoomW = baseW / state.zoom;
+  const zoomH = baseH / state.zoom;
+  const zoomX = baseX + (baseW - zoomW) / 2;
+  const zoomY = baseY + (baseH - zoomH) / 2;
+  return { x: zoomX, y: zoomY, width: zoomW, height: zoomH, stageWidth: stageRect.width, stageHeight: stageRect.height };
+}
+
+function guideSourceCrop(videoW, videoH) {
+  const visible = visibleVideoCrop(videoW, videoH);
+  const g = getGuideRect();
+  return {
+    x: visible.x + (g.x / visible.stageWidth) * visible.width,
+    y: visible.y + (g.y / visible.stageHeight) * visible.height,
+    width: (g.width / visible.stageWidth) * visible.width,
+    height: (g.height / visible.stageHeight) * visible.height,
+    guide: g
+  };
+}
+
 async function scanCurrentView() {
   if (state.busy || state.locked || !state.stream) return;
   els.scan.disabled = true; clearBoxes(); resetSelection();
   try {
     const worker = await initWorker();
     await waitForVideo(els.camera);
-    const w = els.camera.videoWidth, h = els.camera.videoHeight;
-    if (!w || !h) throw new Error('no-video-size');
-    state.frameWidth = w; state.frameHeight = h;
-    els.canvas.width = w; els.canvas.height = h;
+    const vw = els.camera.videoWidth, vh = els.camera.videoHeight;
+    if (!vw || !vh) throw new Error('no-video-size');
+
+    const crop = guideSourceCrop(vw, vh);
+    const targetW = 1500;
+    const targetH = Math.max(400, Math.round(targetW * crop.height / crop.width));
+    state.frameWidth = targetW; state.frameHeight = targetH; state.displayRect = crop.guide;
+    els.canvas.width = targetW; els.canvas.height = targetH;
     const ctx = els.canvas.getContext('2d', { alpha: false, willReadFrequently: true });
-    ctx.drawImage(els.camera, 0, 0, w, h);
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, targetW, targetH);
+    ctx.drawImage(els.camera, crop.x, crop.y, crop.width, crop.height, 0, 0, targetW, targetH);
 
     const candidates = els.layout.value === 'vertical' ? [90, 270] : els.layout.value === 'auto' ? [0, 90, 270] : [0];
     let best = null;
     for (let i = 0; i < candidates.length; i++) {
       const angle = candidates[i];
       const source = rotatedCanvas(els.canvas, angle);
-      await worker.setParameters({ preserve_interword_spaces: '1', tessedit_pageseg_mode: angle === 0 ? '3' : '6' });
-      setBusy(true, `文字を探しています（${i + 1}/${candidates.length}）`, i / candidates.length);
+      await worker.setParameters({ preserve_interword_spaces: '1', tessedit_pageseg_mode: angle === 0 ? '6' : '6' });
+      setBusy(true, `点線枠の文字を探しています（${i + 1}/${candidates.length}）`, i / candidates.length);
       const result = await worker.recognize(source, {}, { blocks: true });
       const units = extractUnits(result.data).map((u, index) => ({
-        ...u, index, bbox: mapBbox(u.bbox, angle, w, h)
-      })).filter(u => u.text && u.bbox && /[A-Za-z0-9ぁ-んァ-ヶ一-龯々、。！？,.!?]/.test(u.text));
+        ...u, index, bbox: mapBbox(u.bbox, angle, targetW, targetH)
+      })).filter(u => u.text && u.bbox && Number(u.confidence || 0) >= 25 && /[A-Za-z0-9ぁ-んァ-ヶ一-龯々、。！？,.!?]/.test(u.text));
       const score = scoreResult(units);
       if (!best || score > best.score) best = { units, score };
     }
     state.units = best?.units || [];
     if (!state.units.length) {
-      els.status.textContent = '文字を見つけられませんでした。近づいて、もう一度押してください。';
+      els.status.textContent = '点線枠の中で文字を見つけられませんでした。もう少し拡大して試してください。';
       return;
     }
     renderBoxes();
-    els.status.textContent = '白い枠が文字に合っていれば、読みたい最初の文字をタップしてください。';
+    els.status.textContent = '白い枠から、読みたい最初の文字をタップしてください。';
   } catch (e) {
     console.error(e); els.status.textContent = '文字認識に失敗しました。もう一度試してください。';
   } finally {
@@ -172,7 +219,7 @@ async function resumeLive() {
   state.locked = false; els.dim.hidden = true; els.guide.hidden = false;
   els.panel.hidden = true; els.scan.hidden = false; els.resume.hidden = true;
   await els.camera.play();
-  els.status.textContent = '文字にかざし、端末を止めて「文字を探す」を押してください。';
+  els.status.textContent = 'ピンチまたは＋−で拡大し、点線枠に文字を入れてください。';
 }
 
 function speakSelection() {
@@ -188,14 +235,29 @@ function speakSelection() {
 }
 
 function positionBox(el, bbox) {
-  const r = els.stage.getBoundingClientRect(), w = state.frameWidth, h = state.frameHeight;
-  const scale = Math.max(r.width / w, r.height / h), ox = (r.width - w * scale) / 2, oy = (r.height - h * scale) / 2;
-  el.style.left = `${ox + bbox.x0 * scale}px`; el.style.top = `${oy + bbox.y0 * scale}px`;
-  el.style.width = `${Math.max(26, (bbox.x1 - bbox.x0) * scale)}px`; el.style.height = `${Math.max(28, (bbox.y1 - bbox.y0) * scale)}px`;
+  const d = state.displayRect || getGuideRect();
+  const sx = d.width / state.frameWidth, sy = d.height / state.frameHeight;
+  el.style.left = `${d.x + bbox.x0 * sx}px`; el.style.top = `${d.y + bbox.y0 * sy}px`;
+  el.style.width = `${Math.max(22, (bbox.x1 - bbox.x0) * sx)}px`; el.style.height = `${Math.max(24, (bbox.y1 - bbox.y0) * sy)}px`;
 }
-function repositionBoxes() { if (state.units.length) renderBoxes(); }
+function repositionBoxes() { if (state.units.length) { state.displayRect = getGuideRect(); renderBoxes(); } }
 function clearBoxes() { els.overlay.replaceChildren(); }
 function resetSelection() { state.startIndex = null; state.endIndex = null; els.panel.hidden = true; els.selectedText.textContent = '文字を選んでください'; els.speak.hidden = true; els.clear.hidden = true; }
+
+function setZoom(value) {
+  state.zoom = Math.min(4, Math.max(1, Number(value)));
+  els.zoomSlider.value = state.zoom.toFixed(1);
+  els.zoomValue.value = `${state.zoom.toFixed(1)}×`;
+  els.stage.style.setProperty('--camera-zoom', state.zoom);
+  clearBoxes();
+  if (!state.locked) els.status.textContent = '点線枠に読みたい文字を入れて、「文字を探す」を押してください。';
+}
+
+function touchDistance(touches) {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.hypot(dx, dy);
+}
 
 function rotatedCanvas(src, angle) {
   if (angle === 0) return src;
@@ -227,6 +289,20 @@ els.clear.addEventListener('click', clearSelectionOnly);
 els.rate.addEventListener('input', () => { els.rateValue.value = els.rate.value; });
 els.privacyButton.addEventListener('click', () => els.privacy.showModal());
 els.closePrivacy.addEventListener('click', () => els.privacy.close());
+els.zoomSlider.addEventListener('input', () => setZoom(els.zoomSlider.value));
+els.zoomOut.addEventListener('click', () => setZoom(state.zoom - 0.25));
+els.zoomIn.addEventListener('click', () => setZoom(state.zoom + 0.25));
+els.stage.addEventListener('touchstart', (e) => {
+  if (e.touches.length === 2 && !state.locked) {
+    e.preventDefault(); state.pinchStartDistance = touchDistance(e.touches); state.pinchStartZoom = state.zoom;
+  }
+}, { passive: false });
+els.stage.addEventListener('touchmove', (e) => {
+  if (e.touches.length === 2 && !state.locked && state.pinchStartDistance) {
+    e.preventDefault(); setZoom(state.pinchStartZoom * touchDistance(e.touches) / state.pinchStartDistance);
+  }
+}, { passive: false });
+els.stage.addEventListener('touchend', () => { state.pinchStartDistance = 0; }, { passive: true });
 window.addEventListener('resize', repositionBoxes);
 window.addEventListener('pagehide', async () => { stopCamera(); window.speechSynthesis.cancel(); try { await state.worker?.terminate(); } catch {} });
-window.addEventListener('load', startCamera);
+window.addEventListener('load', () => { setZoom(1); startCamera(); });

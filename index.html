@@ -26,7 +26,13 @@
         <canvas id="analysisCanvas" hidden></canvas>
         <div id="dimLayer" class="dim-layer" hidden></div>
         <div id="ocrOverlay" class="ocr-overlay" aria-label="読みたい文字を選ぶ領域"></div>
-        <div id="guide" class="guide"><span>文字にかざして、白い枠が出るまで端末を止めてください</span></div>
+        <div id="guide" class="guide"><span>読みたい文字を点線枠に入れてください</span></div>
+        <div class="zoom-controls" aria-label="カメラの拡大">
+          <button id="zoomOutButton" type="button" aria-label="縮小">−</button>
+          <input id="zoomSlider" type="range" min="1" max="4" step="0.1" value="1" aria-label="カメラの拡大率">
+          <button id="zoomInButton" type="button" aria-label="拡大">＋</button>
+          <output id="zoomValue">1.0×</output>
+        </div>
       </div>
 
       <div id="status" class="status" role="status" aria-live="polite">カメラを準備しています</div>
@@ -71,7 +77,7 @@
     <div class="dialog-content">
       <h2>画像と通信について</h2>
       <p>カメラ映像は画面に表示するだけで、写真アプリや端末の保存領域には保存しません。</p>
-      <p>文字認識のため、映像の一場面をページ内の非表示Canvasへ一時コピーします。文字認識はブラウザ内で実行し、画像そのものは外部へ送信しません。</p>
+      <p>文字認識のため、点線枠の内側だけをページ内の非表示Canvasへ一時コピーします。文字認識はブラウザ内で実行し、画像そのものは外部へ送信しません。</p>
       <button id="closePrivacyButton" class="button button-primary" type="button">閉じる</button>
     </div>
   </dialog>
