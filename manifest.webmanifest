@@ -1,0 +1,10 @@
+{
+  "name": "ことばカメラ",
+  "short_name": "ことばカメラ",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f4f6f9",
+  "theme_color": "#ffffff",
+  "lang": "ja",
+  "description": "カメラ映像を保存せず、一時停止して文字を選び、読み・発音・翻訳を利用するWebアプリ"
+}
