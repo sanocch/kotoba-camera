@@ -132,11 +132,11 @@ async function scanCurrentView() {
     }
     state.units = best?.units || [];
     if (!state.units.length) {
-      els.status.textContent = '点線枠の中で文字を見つけられませんでした。もう少し拡大して試してください。';
+      els.status.textContent = '点線枠の中で文字を見つけられませんでした。文字を大きく映して、もう一度試してください。';
       return;
     }
     renderBoxes();
-    els.status.textContent = '白い枠から、読みたい最初の文字をタップしてください。';
+    els.status.textContent = '青い枠から、読みたい最初のことばをタップしてください。';
   } catch (e) {
     console.error(e); els.status.textContent = '文字認識に失敗しました。もう一度試してください。';
   } finally {
@@ -145,13 +145,51 @@ async function scanCurrentView() {
 }
 
 function extractUnits(data) {
-  const units = [];
-  for (const block of data.blocks || []) for (const para of block.paragraphs || []) for (const line of para.lines || []) for (const word of line.words || []) {
-    const symbols = (word.symbols || []).filter(s => (s.text || '').trim());
-    if (symbols.length) for (const s of symbols) units.push({ text: s.text.trim(), bbox: s.bbox, confidence: s.confidence ?? word.confidence ?? 0 });
-    else if ((word.text || '').trim()) units.push({ text: word.text.trim(), bbox: word.bbox, confidence: word.confidence ?? 0 });
+  // Google Lensに近い見え方にするため、原則として「単語」単位で枠を作る。
+  // 日本語OCRが一語を細かく分割した場合は、同じ行で近接する枠を結合する。
+  const raw = [];
+  let lineIndex = 0;
+  for (const block of data.blocks || []) {
+    for (const para of block.paragraphs || []) {
+      for (const line of para.lines || []) {
+        for (const word of line.words || []) {
+          const text = (word.text || '').replace(/\s+/g, '').trim();
+          if (!text || !word.bbox) continue;
+          raw.push({ text, bbox: word.bbox, confidence: word.confidence ?? 0, lineIndex });
+        }
+        lineIndex += 1;
+      }
+    }
   }
-  return units;
+  return mergeNearbyJapaneseWords(raw);
+}
+
+function mergeNearbyJapaneseWords(words) {
+  const merged = [];
+  for (const word of words) {
+    const prev = merged.at(-1);
+    if (!prev || prev.lineIndex !== word.lineIndex) {
+      merged.push({ ...word });
+      continue;
+    }
+    const prevHeight = Math.max(1, prev.bbox.y1 - prev.bbox.y0);
+    const wordHeight = Math.max(1, word.bbox.y1 - word.bbox.y0);
+    const gap = word.bbox.x0 - prev.bbox.x1;
+    const bothJapanese = /[ぁ-んァ-ヶ一-龯々]/.test(prev.text) && /[ぁ-んァ-ヶ一-龯々]/.test(word.text);
+    const close = gap >= -Math.min(prevHeight, wordHeight) * .15 && gap <= Math.max(prevHeight, wordHeight) * .28;
+    const compact = (prev.text + word.text).length <= 10;
+    if (bothJapanese && close && compact) {
+      prev.text += word.text;
+      prev.bbox = {
+        x0: Math.min(prev.bbox.x0, word.bbox.x0), y0: Math.min(prev.bbox.y0, word.bbox.y0),
+        x1: Math.max(prev.bbox.x1, word.bbox.x1), y1: Math.max(prev.bbox.y1, word.bbox.y1)
+      };
+      prev.confidence = Math.min(prev.confidence, word.confidence);
+    } else {
+      merged.push({ ...word });
+    }
+  }
+  return merged;
 }
 
 function renderBoxes() {
@@ -170,7 +208,7 @@ async function chooseIndex(index) {
   if (!state.locked) {
     state.locked = true;
     els.camera.pause();
-    els.guide.hidden = true; els.dim.hidden = false; els.scan.hidden = true; els.resume.hidden = false;
+    els.guide.hidden = true; els.dim.hidden = true; els.scan.hidden = true; els.resume.hidden = false;
     els.panel.hidden = false;
   }
   if (state.startIndex === null) {
@@ -306,3 +344,5 @@ els.stage.addEventListener('touchend', () => { state.pinchStartDistance = 0; }, 
 window.addEventListener('resize', repositionBoxes);
 window.addEventListener('pagehide', async () => { stopCamera(); window.speechSynthesis.cancel(); try { await state.worker?.terminate(); } catch {} });
 window.addEventListener('load', () => { setZoom(1); startCamera(); });
+
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(console.error));
